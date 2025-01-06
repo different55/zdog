@@ -18,9 +18,10 @@
 // ----- BoxRect ----- //
 
 var BoxRect = Rect.subclass();
+
 // prevent double-creation in parent.copyGraph()
 // only create in Box.create()
-BoxRect.prototype.copyGraph = function() {};
+BoxRect.prototype.copyGraph = function() { };
 
 // ----- Box ----- //
 
@@ -43,10 +44,13 @@ utils.extend( boxDefaults, {
   width: 1,
   height: 1,
   depth: 1,
-  fill: true,
-} );
+  fill: true
+}, Shape.defaults );
+delete boxDefaults.path;
 
 var Box = Anchor.subclass( boxDefaults );
+Box.ignoreKeysJSON = [ 'children' ];
+Box.type = 'Box';
 
 /* eslint-disable no-self-assign */
 Box.prototype.create = function( options ) {

@@ -77,6 +77,10 @@ Zdog.cloneColor = function(value) {
   return (value && value.clone) ? value.clone() : value;
 }
 
+Zdog.exportGraph = function(model) {
+  return JSON.parse( JSON.stringify( model ) );
+};
+
 return Zdog;
 
 } ) );
