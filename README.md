@@ -4,6 +4,10 @@ _Round, flat, designer-friendly pseudo-3D engine_
 
 View complete documentation and live demos at [zzz.dog](https://zzz.dog).
 
+## About the Fork
+
+I'm just merging in some changes from some longstanding upstream pull requests because I think this is a neat project.
+
 ## Install
 
 ### Download
