@@ -24,6 +24,7 @@
         require('./hemisphere'),
         require('./cylinder'),
         require('./cone'),
+		    require('./horn'),
         require('./box'),
         require('./texture')
     );
@@ -34,7 +35,7 @@
 /* eslint-disable max-params */
 } )( this, function factory( Zdog, CanvasRenderer, SvgRenderer, Vector, Anchor,
     Dragger, Illustration, PathCommand, Shape, Group, Rect, RoundedRect,
-    Ellipse, Polygon, Hemisphere, Cylinder, Cone, Box, Texture ) {
+    Ellipse, Polygon, Hemisphere, Cylinder, Cone, Horn, Box, Texture ) {
 /* eslint-enable max-params */
 
       Zdog.CanvasRenderer = CanvasRenderer;
@@ -53,6 +54,7 @@
       Zdog.Hemisphere = Hemisphere;
       Zdog.Cylinder = Cylinder;
       Zdog.Cone = Cone;
+	  Zdog.Horn = Horn;
       Zdog.Box = Box;
       Zdog.Texture = Texture;
 
