@@ -26,6 +26,8 @@ var HornGroup = Group.subclass({
   updateSort: true,
 });
 
+HornGroup.type = 'HornGroup';
+
 HornGroup.prototype.create = function() {
   Group.prototype.create.apply( this, arguments );
   
@@ -161,6 +163,8 @@ HornGroup.prototype.copyGraph = noop;
 
 var HornCap = Shape.subclass();
 
+HornCap.type = 'HornCap';
+
 HornCap.prototype.copyGraph = noop;
 
 // ----- Horn ----- //
@@ -172,6 +176,8 @@ var Horn = Shape.subclass({
   frontFace: undefined,
   fill: true,
 });
+
+Horn.type = 'Horn';
 
 var TAU = utils.TAU;
 
