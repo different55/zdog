@@ -70,6 +70,17 @@ Zdog.easeInOut = function( alpha, power ) {
   return isFirstHalf ? curve : 1 - curve;
 };
 
+Zdog.isColor = function(value) {
+  return (typeof value == 'string') || (value && value.isTexture);
+}
+Zdog.cloneColor = function(value) {
+  return (value && value.clone) ? value.clone() : value;
+}
+
+Zdog.exportGraph = function(model) {
+  return JSON.parse( JSON.stringify( model ) );
+};
+
 return Zdog;
 
 } ) );
@@ -126,17 +137,31 @@ CanvasRenderer.stroke = function( ctx, elem, isStroke, color, lineWidth ) {
   if ( !isStroke ) {
     return;
   }
-  ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
-  ctx.stroke();
+  if (color && color.getCanvasFill) {
+    ctx.save();
+    ctx.strokeStyle = color.getCanvasFill(ctx);
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
 };
 
 CanvasRenderer.fill = function( ctx, elem, isFill, color ) {
   if ( !isFill ) {
     return;
   }
-  ctx.fillStyle = color;
-  ctx.fill();
+  if (color && color.getCanvasFill) {
+    ctx.save();
+    ctx.fillStyle = color.getCanvasFill(ctx);
+    ctx.fill();
+    ctx.restore();
+  } else {
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
 };
 
 CanvasRenderer.end = function() {};
@@ -208,12 +233,18 @@ SvgRenderer.stroke = function( svg, elem, isStroke, color, lineWidth ) {
   if ( !isStroke ) {
     return;
   }
+  if (color && color.getSvgFill) {
+    color = color.getSvgFill(svg);
+  }
   elem.setAttribute( 'stroke', color );
   elem.setAttribute( 'stroke-width', lineWidth );
 };
 
 SvgRenderer.fill = function( svg, elem, isFill, color ) {
   var fillColor = isFill ? color : 'none';
+  if (fillColor && fillColor.getSvgFill) {
+    fillColor = fillColor.getSvgFill(svg);
+  }
   elem.setAttribute( 'fill', fillColor );
 };
 
@@ -382,6 +413,32 @@ Vector.prototype.copy = function() {
   return new Vector( this );
 };
 
+function round( num ) {
+  return Math.round( num * 1000 ) / 1000;
+}
+
+Vector.prototype.toJSON = function() {
+  var x = this.x;
+  var y = this.y;
+  var z = this.z;
+
+  if ( x === y && y === z ) {
+    return x !== 0 ? round( x ) : undefined;
+  }
+
+  var obj = { x: x, y: y, z: z };
+  var result = {};
+
+  Object.keys( obj ).forEach( function( key ) {
+    var value = obj[ key ];
+    if ( value !== 0 ) {
+      result[ key ] = round( value );
+    }
+  });
+
+  return Object.keys( result ).length ? result : undefined;
+};
+
 return Vector;
 
 } ) );
@@ -409,6 +466,7 @@ var onePoint = { x: 1, y: 1, z: 1 };
 function Anchor( options ) {
   this.create( options || {} );
 }
+Anchor.type = 'Anchor';
 
 Anchor.prototype.create = function( options ) {
   this.children = [];
@@ -427,6 +485,9 @@ Anchor.prototype.create = function( options ) {
   if ( this.addTo ) {
     this.addTo.addChild( this );
   }
+  if ( options.importGraph ) {
+    this.importGraph( options.importGraph );
+  }
 };
 
 Anchor.defaults = {};
@@ -437,6 +498,10 @@ Anchor.optionKeys = Object.keys( Anchor.defaults ).concat([
   'scale',
   'addTo',
 ]);
+
+Anchor.ignoreKeysJSON = [
+  'addTo',
+];
 
 Anchor.prototype.setOptions = function( options ) {
   var optionKeys = this.constructor.optionKeys;
@@ -593,10 +658,71 @@ Anchor.prototype.copyGraph = function( options ) {
   return clone;
 };
 
+Anchor.prototype.importGraph = function( model ) {
+  this.addChild( revive( model ) );
+
+  function revive( graph ) {
+    graph = utils.extend( {}, graph );
+    // quick hack to avoid nested Illustration items
+    var type = graph.type === 'Illustration' ? 'Anchor' : graph.type;
+    var children = (graph.children || []).slice( 0 );
+    delete graph.children;
+
+    var Item = utils[ type ];
+    var rootGraph;
+    if ( Item ) {
+      rootGraph = new Item( graph );
+      children.forEach( function( child ) {
+        revive( utils.extend( child, { addTo: rootGraph } ) );
+      } );
+    }
+    return rootGraph;
+  }
+};
+
 Anchor.prototype.normalizeRotate = function() {
   this.rotate.x = utils.modulo( this.rotate.x, TAU );
   this.rotate.y = utils.modulo( this.rotate.y, TAU );
   this.rotate.z = utils.modulo( this.rotate.z, TAU );
+};
+
+Anchor.prototype.toJSON = function() {
+  var type = this.constructor.type;
+  var result = { type: type };
+  var defaults = this.constructor.defaults;
+  var optionKeys = this.constructor.optionKeys.slice(0).concat('children');
+  var ignoreKeys = Anchor.ignoreKeysJSON
+    .slice(0)
+    .concat(this.constructor.ignoreKeysJSON || []);
+
+  optionKeys.forEach(function( key ) {
+    if (ignoreKeys.indexOf(key) > -1) {
+      return;
+    }
+    var value = this[key];
+
+    if (
+      ![ 'undefined', 'function' ].indexOf(typeof value) > -1 &&
+        value !== defaults[key]
+    ) {
+      if (Array.isArray(value) && value.length === 0) {
+        return;
+      }
+      if (value.toJSON) {
+        var serialized = value.toJSON();
+        if (typeof serialized !== 'undefined') {
+          if (key === 'scale' && serialized === 1) {
+            return;
+          }
+          result[key] = serialized;
+        }
+      } else {
+        result[key] = value;
+      }
+    }
+  }, this);
+
+  return result;
 };
 
 // ----- subclass ----- //
@@ -620,7 +746,9 @@ function getSubclass( Super ) {
       if ( !Item.optionKeys.indexOf( key ) != 1 ) {
         Item.optionKeys.push( key );
       }
-    } );
+    });
+    // create ignoreKeysJSON
+    Item.ignoreKeysJSON = Super.ignoreKeysJSON.slice(0);
 
     Item.subclass = getSubclass( Item );
 
@@ -791,6 +919,8 @@ var Illustration = Anchor.subclass({
   onDragEnd: noop,
   onResize: noop,
 });
+Illustration.ignoreKeysJSON = [ 'dragRotate', 'element', 'resize' ];
+Illustration.type = 'Illustration';
 
 utils.extend( Illustration.prototype, Dragger.prototype );
 
@@ -1126,6 +1256,8 @@ var Shape = Anchor.subclass({
   backface: true,
 });
 
+Shape.type = 'Shape';
+
 Shape.prototype.create = function( options ) {
   Anchor.prototype.create.call( this, options );
   this.updatePath();
@@ -1191,6 +1323,13 @@ Shape.prototype.reset = function() {
   this.pathCommands.forEach( function( command ) {
     command.reset();
   } );
+
+  if (this.backface && this.backface.reset) {
+    this.backface.reset();
+  }
+  if (this.color && this.color.reset) {
+    this.color.reset();
+  }
 };
 
 Shape.prototype.transform = function( translation, rotation, scale ) {
@@ -1206,6 +1345,12 @@ Shape.prototype.transform = function( translation, rotation, scale ) {
   this.children.forEach( function( child ) {
     child.transform( translation, rotation, scale );
   } );
+  if (this.backface && this.backface.transform) {
+    this.backface.transform( translation, rotation, scale );
+  }
+  if (this.color && this.color.transform) {
+    this.color.transform( translation, rotation, scale );
+  }
 };
 
 Shape.prototype.updateSortValue = function() {
@@ -1253,17 +1398,16 @@ Shape.prototype.render = function( ctx, renderer ) {
 
 var TAU = utils.TAU;
 // Safari does not render lines with no size, have to render circle instead
-Shape.prototype.renderCanvasDot = function( ctx ) {
+Shape.prototype.renderCanvasDot = function( ctx , renderer) {
   var lineWidth = this.getLineWidth();
   if ( !lineWidth ) {
     return;
   }
-  ctx.fillStyle = this.getRenderColor();
   var point = this.pathCommands[0].endRenderPoint;
   ctx.beginPath();
   var radius = lineWidth/2;
   ctx.arc( point.x, point.y, radius, 0, TAU );
-  ctx.fill();
+  renderer.fill(ctx, null, true, this.getRenderColor() );
 };
 
 Shape.prototype.getLineWidth = function() {
@@ -1278,7 +1422,7 @@ Shape.prototype.getLineWidth = function() {
 
 Shape.prototype.getRenderColor = function() {
   // use backface color if applicable
-  var isBackfaceColor = typeof this.backface == 'string' && this.isFacingBack;
+  var isBackfaceColor = utils.isColor(this.backface) && this.isFacingBack;
   var color = isBackfaceColor ? this.backface : this.color;
   return color;
 };
@@ -1334,6 +1478,9 @@ var Group = Anchor.subclass({
   updateSort: false,
   visible: true,
 });
+
+Group.type = 'Group';
+
 
 // ----- update ----- //
 
@@ -1400,6 +1547,8 @@ var Rect = Shape.subclass({
   height: 1,
 });
 
+Rect.type = 'Rect';
+
 Rect.prototype.setPath = function() {
   var x = this.width / 2;
   var y = this.height / 2;
@@ -1437,6 +1586,8 @@ var RoundedRect = Shape.subclass({
   cornerRadius: 0.25,
   closed: false,
 });
+
+RoundedRect.type = 'RoundedRect';
 
 RoundedRect.prototype.setPath = function() {
   /* eslint
@@ -1517,6 +1668,8 @@ var Ellipse = Shape.subclass({
   closed: false,
 });
 
+Ellipse.type = 'Ellipse';
+
 Ellipse.prototype.setPath = function() {
   var width = this.width != undefined ? this.width : this.diameter;
   var height = this.height != undefined ? this.height : this.diameter;
@@ -1576,6 +1729,8 @@ var Polygon = Shape.subclass({
   radius: 0.5,
 });
 
+Polygon.type = 'Polygon';
+
 var TAU = utils.TAU;
 
 Polygon.prototype.setPath = function() {
@@ -1611,6 +1766,8 @@ return Polygon;
 var Hemisphere = Ellipse.subclass({
   fill: true,
 });
+
+Hemisphere.type = 'Hemisphere';
 
 var TAU = utils.TAU;
 
@@ -1715,6 +1872,8 @@ var CylinderGroup = Group.subclass({
   updateSort: true,
 });
 
+CylinderGroup.type = 'CylinderGroup';
+
 CylinderGroup.prototype.create = function() {
   Group.prototype.create.apply( this, arguments );
   this.pathCommands = [
@@ -1786,6 +1945,9 @@ var Cylinder = Shape.subclass({
   fill: true,
 });
 
+Cylinder.type = 'Cylinder';
+
+
 var TAU = utils.TAU;
 
 Cylinder.prototype.create = function( /* options */) {
@@ -1809,14 +1971,14 @@ Cylinder.prototype.create = function( /* options */) {
     color: this.color,
     stroke: this.stroke,
     fill: this.fill,
-    backface: this.frontFace || baseColor,
+    backface: utils.cloneColor(this.frontFace || baseColor),
     visible: this.visible,
   });
   // back outside base
   this.rearBase = this.group.rearBase = this.frontBase.copy({
     translate: { z: -baseZ },
     rotate: { y: 0 },
-    backface: baseColor,
+    backface: utils.cloneColor(baseColor),
   });
 };
 
@@ -1872,6 +2034,7 @@ var Cone = Ellipse.subclass({
   length: 1,
   fill: true,
 });
+Cone.type = 'Cone';
 
 var TAU = utils.TAU;
 
@@ -1984,6 +2147,517 @@ return Cone;
 
 } ) );
 /**
+ * Horn composite shape
+ */
+
+( function( root, factory ) {
+  // module definition
+  if ( typeof module == 'object' && module.exports ) {
+    // CommonJS
+    module.exports = factory( require('./boilerplate'),
+        require('./path-command'), require('./shape'), require('./group'),
+        require('./vector') );
+  } else {
+    // browser global
+    var Zdog = root.Zdog;
+    Zdog.Horn = factory( Zdog, Zdog.PathCommand, Zdog.Shape,
+        Zdog.Group, Zdog.Vector );
+  }
+}( this, function factory( utils, PathCommand, Shape, Group, Vector ) {
+
+function noop() {}
+
+// ----- HornGroup ----- //
+
+var HornGroup = Group.subclass({
+  color: '#333',
+  fill: true,
+  stroke: true,
+  updateSort: true,
+});
+
+HornGroup.type = 'HornGroup';
+
+HornGroup.prototype.create = function() {
+  Group.prototype.create.apply( this, arguments );
+
+  // vectors used for calculation
+  this.renderApex = new Vector();
+
+  this.pathCommands = [
+    new PathCommand( 'move', [ {} ] ),
+    new PathCommand( 'line', [ {} ] ),
+    new PathCommand( 'line', [ {} ] ),
+    new PathCommand( 'line', [ {} ] ),
+  ];
+};
+
+HornGroup.prototype.render = function( ctx, renderer ) {
+  this.renderHornSurface( ctx, renderer );
+  Group.prototype.render.apply( this, arguments );
+};
+
+HornGroup.prototype.renderHornSurface = function( ctx, renderer ) {
+  if ( !this.visible ) {
+    return;
+  }
+  // render horn surface
+  var elem = this.getRenderElement( ctx, renderer );
+  var scale = this.addTo.renderNormal.magnitude();
+  var frontRadius = this.addTo.frontDiameter/2 * scale;
+  var rearRadius = this.addTo.rearDiameter/2 * scale;
+  this.renderApex.set( this.rearBase.renderOrigin )
+    .subtract( this.frontBase.renderOrigin );
+
+  var apexDistance = this.renderApex.magnitude2d();
+  if ( apexDistance <= Math.abs( rearRadius - frontRadius ) ) {
+    return;
+  }
+
+  var angle = Math.atan2( this.renderApex.y, this.renderApex.x );
+  var angle2 = Math.acos((frontRadius - rearRadius) / apexDistance);
+
+  var frontTangentA = this.pathCommands[0].renderPoints[0];
+  var rearTangentA = this.pathCommands[1].renderPoints[0];
+  var rearTangentB = this.pathCommands[2].renderPoints[0];
+  var frontTangentB = this.pathCommands[3].renderPoints[0];
+
+  frontTangentA.x = Math.cos( angle + angle2 ) * frontRadius;
+  frontTangentA.y = Math.sin( angle + angle2 ) * frontRadius;
+  rearTangentA.x = Math.cos( angle + angle2 ) * rearRadius;
+  rearTangentA.y = Math.sin( angle + angle2 ) * rearRadius;
+
+  frontTangentB.x = Math.cos( angle - angle2 ) * frontRadius;
+  frontTangentB.y = Math.sin( angle - angle2 ) * frontRadius;
+  rearTangentB.x = Math.cos( angle - angle2 ) * rearRadius;
+  rearTangentB.y = Math.sin( angle - angle2 ) * rearRadius;
+
+  frontTangentA.add( this.frontBase.renderOrigin );
+  frontTangentB.add( this.frontBase.renderOrigin );
+  rearTangentA.add( this.rearBase.renderOrigin );
+  rearTangentB.add( this.rearBase.renderOrigin );
+
+  if ( renderer.isCanvas ) {
+    ctx.lineCap = 'butt'; // nice
+  }
+  renderer.renderPath( ctx, elem, this.pathCommands );
+  renderer.stroke( ctx, elem, this.stroke, this.color, Shape.prototype.getLineWidth.apply(this) );
+  renderer.fill( ctx, elem, this.fill, this.color );
+  renderer.end( ctx, elem );
+
+  if ( renderer.isCanvas ) {
+    ctx.lineCap = 'round'; // reset
+  }
+};
+
+var svgURI = 'http://www.w3.org/2000/svg';
+
+HornGroup.prototype.getRenderElement = function( ctx, renderer ) {
+  if ( !renderer.isSvg ) {
+    return;
+  }
+  if ( !this.svgElement ) {
+    // create svgElement
+    this.svgElement = document.createElementNS( svgURI, 'path');
+    this.svgElement.setAttribute( 'stroke-linecap', 'round' );
+    this.svgElement.setAttribute( 'stroke-linejoin', 'round' );
+  }
+  return this.svgElement;
+};
+
+// prevent double-creation in parent.copyGraph()
+// only create in Horn.create()
+HornGroup.prototype.copyGraph = noop;
+
+// ----- HornCap ----- //
+
+var HornCap = Shape.subclass();
+
+HornCap.type = 'HornCap';
+
+HornCap.prototype.copyGraph = noop;
+
+// ----- Horn ----- //
+
+var Horn = Shape.subclass({
+  frontDiameter: 1,
+  rearDiameter: 1,
+  length: 1,
+  frontFace: undefined,
+  fill: true,
+});
+
+Horn.type = 'Horn';
+
+var TAU = utils.TAU;
+
+Horn.prototype.create = function(/* options */) {
+  // call super
+  Shape.prototype.create.apply( this, arguments );
+  // composite shape, create child shapes
+  // HornGroup to render horn surface then bases
+  this.group = new HornGroup({
+    addTo: this,
+    color: this.color,
+    fill: this.fill,
+    stroke: this.stroke,
+    visible: this.visible,
+  });
+  var baseZ = this.length/2;
+  var baseColor = this.backface || true;
+  // front outside base
+  this.frontBase = this.group.frontBase = new HornCap({
+    addTo: this.group,
+    translate: { z: (baseZ - this.frontDiameter/2) },
+    rotate: { y: TAU/2 },
+    color: this.color,
+    stroke: this.frontDiameter + this.stroke,
+    fill: this.fill,
+    backface: this.frontFace || baseColor,
+    visible: this.visible,
+  });
+  // back outside base
+  this.rearBase = this.group.rearBase = new HornCap({
+    addTo: this.group,
+    translate: { z: (-baseZ + this.rearDiameter/2) },
+    rotate: { y: 0 },
+    color: this.color,
+    stroke: this.rearDiameter + this.stroke,
+    fill: this.fill,
+    backface: baseColor,
+    visible: this.visible,
+  });
+
+};
+
+Horn.prototype.updateFrontCapDiameter = function(size) {
+	this.frontBase.stroke = size + this.stroke;
+	var baseZ = this.length/2;
+	this.frontBase.translate.z = (baseZ - size/2);
+}
+
+Horn.prototype.updateRearCapDiameter = function(size) {
+	this.rearBase.stroke = size + this.stroke;
+	var baseZ = this.length/2;
+	this.rearBase.translate.z = (-baseZ + size/2);
+}
+
+// Horn shape does not render anything
+Horn.prototype.render = function() {};
+
+// ----- set child properties ----- //
+
+var childProperties = [ 'stroke', 'fill', 'color', 'visible',
+                        'frontDiameter', 'rearDiameter' ];
+childProperties.forEach( function( property ) {
+  // use proxy property for custom getter & setter
+  var _prop = '_' + property;
+  Object.defineProperty( Horn.prototype, property, {
+    get: function() {
+      return this[ _prop ];
+    },
+    set: function( value ) {
+      this[ _prop ] = value;
+      // set property on children
+      if ( this.frontBase ) {
+		if (property === 'frontDiameter') {
+		  this.updateFrontCapDiameter(value);
+		}
+		if (property === 'rearDiameter') {
+		  this.updateRearCapDiameter(value);
+		}
+        this.frontBase[ property ] = value;
+        this.rearBase[ property ] = value;
+        this.group[ property ] = value;
+      }
+    },
+  });
+});
+
+// TODO child property setter for backface, frontBaseColor, & rearBaseColor
+
+return Horn;
+
+}));
+/**
+ * Funnel composite shape
+ */
+
+( function( root, factory ) {
+  // module definition
+  if ( typeof module == 'object' && module.exports ) {
+    // CommonJS
+    module.exports = factory( require('./boilerplate'),
+        require('./path-command'), require('./shape'), require('./group'),
+        require('./vector') );
+  } else {
+    // browser global
+    var Zdog = root.Zdog;
+    Zdog.Funnel = factory( Zdog, Zdog.PathCommand, Zdog.Shape, Zdog.Ellipse,
+        Zdog.Group, Zdog.Vector );
+  }
+}( this, function factory( utils, PathCommand, Shape, Ellipse, Group, Vector ) {
+
+function noop() {}
+
+// ----- FunnelGroup ----- //
+
+var FunnelGroup = Group.subclass({
+  color: '#333',
+  fill: true,
+  stroke: true,
+  updateSort: true,
+});
+
+FunnelGroup.type = 'FunnelGroup';
+
+FunnelGroup.prototype.create = function() {
+  Group.prototype.create.apply( this, arguments );
+
+  // vectors used for calculation
+  this.renderApex = new Vector();
+  this.tangentFrontA = new Vector();
+  this.tangentFrontB = new Vector();
+  this.tangentRearA = new Vector();
+  this.tangentRearB = new Vector();
+
+  this.pathCommands = [
+    new PathCommand( 'move', [ {} ] ),
+    new PathCommand( 'line', [ {} ] ),
+	new PathCommand( 'line', [ {} ] ),
+	new PathCommand( 'line', [ {} ] ),
+  ];
+};
+
+FunnelGroup.prototype.render = function( ctx, renderer ) {
+  this.renderFunnelSurface( ctx, renderer );
+  Group.prototype.render.apply( this, arguments );
+};
+
+FunnelGroup.prototype.renderFunnelSurface = function( ctx, renderer ) {
+  if ( !this.visible ) {
+    return;
+  }
+  // render funnel surface
+  var elem = this.getRenderElement( ctx, renderer );
+  var frontBase = this.frontBase;
+  var frontDiameter = frontBase.diameter;
+  var rearBase = this.rearBase;
+  var rearDiameter = rearBase.diameter;
+  var scale = frontBase.renderNormal.magnitude();
+  var frontRadius = frontDiameter/2 * scale;
+  var rearRadius = rearDiameter/2 * scale;
+
+  this.renderApex.set( rearBase.renderOrigin )
+    .subtract( frontBase.renderOrigin );
+
+  // calculate tangents.
+  var scale = frontBase.renderNormal.magnitude();
+  var apexDistance = this.renderApex.magnitude2d();
+  var normalDistance = frontBase.renderNormal.magnitude2d();
+  // eccentricity
+  var eccenAngle = Math.acos( normalDistance / scale );
+  var biggerRadius =  (frontRadius > rearRadius) ? frontRadius : rearRadius;
+  var eccenPercent;
+  if (frontRadius == 0 || rearRadius == 0) {
+	  eccenPercent = 1.0;
+  } else {
+	  eccenPercent = (Math.abs(frontRadius - rearRadius) / biggerRadius);
+  }
+  var eccen = Math.sin( eccenAngle ) * Math.sqrt(eccenPercent);
+  // does apex extend beyond eclipse of face
+  apexDistance = apexDistance + frontRadius/4 + rearRadius/4;
+  var isApexVisible = frontRadius * eccen < apexDistance &&
+                      rearRadius * eccen < apexDistance;
+  if ( !isApexVisible ) {
+    return;
+  }
+  // update tangents
+  // TODO: try something more like horn_old.js updateSortValue()
+  var apexAngle = Math.atan2( frontBase.renderNormal.y, frontBase.renderNormal.x ) +
+      TAU/2;
+  var projectFrontLength = (apexDistance + frontRadius) / eccen;
+  var projectRearLength = (apexDistance + rearRadius) / eccen;
+  var projectFrontAngle = Math.acos( frontRadius / projectFrontLength );
+  var projectRearAngle = Math.acos( rearRadius / -projectRearLength );
+  // set tangent points
+  var tangentFrontA = this.tangentFrontA;
+  var tangentFrontB = this.tangentFrontB;
+  var tangentRearA = this.tangentRearA;
+  var tangentRearB = this.tangentRearB;
+
+  tangentFrontA.x = Math.cos( projectFrontAngle ) * frontRadius * eccen;
+  tangentFrontA.y = Math.sin( projectFrontAngle ) * frontRadius;
+  tangentRearA.x = Math.cos( projectRearAngle ) * rearRadius * eccen;
+  tangentRearA.y = Math.sin( projectRearAngle ) * rearRadius;
+
+  tangentFrontB.set( this.tangentFrontA );
+  tangentFrontB.y *= -1;
+  tangentRearB.set( this.tangentRearA );
+  tangentRearB.y *= -1;
+
+  tangentFrontA.rotateZ( apexAngle);
+  tangentFrontB.rotateZ( apexAngle);
+  tangentFrontA.add( frontBase.renderOrigin );
+  tangentFrontB.add( frontBase.renderOrigin );
+  tangentRearA.rotateZ( apexAngle + TAU/2);
+  tangentRearB.rotateZ( apexAngle + TAU/2);
+  tangentRearA.add( rearBase.renderOrigin );
+  tangentRearB.add( rearBase.renderOrigin );
+
+
+  // set path command render points
+  this.pathCommands[0].renderPoints[0].set( tangentFrontA );
+  this.pathCommands[1].renderPoints[0].set( tangentRearB );
+  this.pathCommands[2].renderPoints[0].set( tangentRearA );
+  this.pathCommands[3].renderPoints[0].set( tangentFrontB );
+
+  if ( renderer.isCanvas ) {
+    ctx.lineCap = 'butt'; // nice
+  }
+  renderer.stroke(ctx, elem, this.stroke, this.color, Shape.prototype.getLineWidth.apply(this));
+  renderer.renderPath( ctx, elem, this.pathCommands );
+  //renderer.stroke( ctx, elem, true, '#333', 0.1 ); // remove once testing is done.
+  renderer.fill( ctx, elem, this.fill, this.color );
+  renderer.end( ctx, elem );
+
+  if ( renderer.isCanvas ) {
+    ctx.lineCap = 'round'; // reset
+  }
+};
+
+var svgURI = 'http://www.w3.org/2000/svg';
+
+FunnelGroup.prototype.getRenderElement = function( ctx, renderer ) {
+  if ( !renderer.isSvg ) {
+    return;
+  }
+  if ( !this.svgElement ) {
+    // create svgElement
+    this.svgElement = document.createElementNS( svgURI, 'path');
+    this.svgElement.setAttribute( 'stroke-linecap', 'round' );
+    this.svgElement.setAttribute( 'stroke-linejoin', 'round' );
+  }
+  return this.svgElement;
+};
+
+// prevent double-creation in parent.copyGraph()
+// only create in Funnel.create()
+FunnelGroup.prototype.copyGraph = noop;
+
+// ----- FunnelCap ----- //
+
+var FunnelCap = Ellipse.subclass();
+
+FunnelCap.type = 'FunnelCap';
+
+FunnelCap.prototype.copyGraph = noop;
+
+// ----- Funnel ----- //
+
+var Funnel = Shape.subclass({
+  frontDiameter: 1,
+  rearDiameter: 1,
+  length: 1,
+  frontFace: undefined,
+  fill: true,
+});
+
+Funnel.type = 'Funnel';
+
+var TAU = utils.TAU;
+
+Funnel.prototype.create = function(/* options */) {
+  // call super
+  Shape.prototype.create.apply( this, arguments );
+  // composite shape, create child shapes
+  // FunnelGroup to render funnel surface then bases
+  this.group = new FunnelGroup({
+    addTo: this,
+    color: this.color,
+    fill: this.fill,
+    stroke: this.stroke,
+    visible: this.visible,
+  });
+  var baseZ = this.length/2;
+  var baseColor = this.backface || true;
+  // front outside base
+  this.frontBase = this.group.frontBase = new FunnelCap({
+    addTo: this.group,
+    translate: { z: (baseZ - this.frontDiameter/2) },
+    rotate: { y: TAU/2 },
+    color: this.color,
+    diameter: this.frontDiameter,
+    fill: this.fill,
+    stroke: this.stroke,
+    backface: this.frontFace || baseColor,
+    visible: this.visible,
+  });
+  // back outside base
+  this.rearBase = this.group.rearBase = new FunnelCap({
+    addTo: this.group,
+    translate: { z: (-baseZ + this.rearDiameter/2) },
+    rotate: { y: 0 },
+    color: this.color,
+    diameter: this.rearDiameter,
+    fill: this.fill,
+    stroke: this.stroke,
+    backface: baseColor,
+    visible: this.visible,
+  });
+
+};
+
+Funnel.prototype.updateFrontCapDiameter = function(size) {
+	this.frontBase.diameter = size;
+	var baseZ = this.length/2;
+	this.frontBase.translate.z = (baseZ - size/2);
+}
+
+Funnel.prototype.updateRearCapDiameter = function(size) {
+	this.rearBase.diameter = size;
+	var baseZ = this.length/2;
+	this.rearBase.translate.z = (-baseZ + size/2);
+}
+
+// Funnel shape does not render anything
+Funnel.prototype.render = function() {};
+
+// ----- set child properties ----- //
+
+var childProperties = [ 'stroke', 'fill', 'color', 'visible',
+                        'frontDiameter', 'rearDiameter' ];
+childProperties.forEach( function( property ) {
+  // use proxy property for custom getter & setter
+  var _prop = '_' + property;
+  Object.defineProperty( Funnel.prototype, property, {
+    get: function() {
+      return this[ _prop ];
+    },
+    set: function( value ) {
+      this[ _prop ] = value;
+      // set property on children
+      if ( this.frontBase ) {
+		if (property === 'frontDiameter') {
+		  this.updateFrontCapDiameter(value);
+		}
+		if (property === 'rearDiameter') {
+		  this.updateRearCapDiameter(value);
+		}
+        this.frontBase[ property ] = value;
+        this.rearBase[ property ] = value;
+        this.group[ property ] = value;
+      }
+    },
+  });
+});
+
+// TODO child property setter for backface, frontBaseColor, & rearBaseColor
+
+return Funnel;
+
+}));
+/**
  * Box composite shape
  */
 
@@ -2003,9 +2677,10 @@ return Cone;
 // ----- BoxRect ----- //
 
 var BoxRect = Rect.subclass();
+
 // prevent double-creation in parent.copyGraph()
 // only create in Box.create()
-BoxRect.prototype.copyGraph = function() {};
+BoxRect.prototype.copyGraph = function() { };
 
 // ----- Box ----- //
 
@@ -2028,10 +2703,13 @@ utils.extend( boxDefaults, {
   width: 1,
   height: 1,
   depth: 1,
-  fill: true,
-} );
+  fill: true
+}, Shape.defaults );
+delete boxDefaults.path;
 
 var Box = Anchor.subclass( boxDefaults );
+Box.ignoreKeysJSON = [ 'children' ];
+Box.type = 'Box';
 
 /* eslint-disable no-self-assign */
 Box.prototype.create = function( options ) {
@@ -2072,7 +2750,11 @@ Box.prototype.setFace = function( faceName, value ) {
   }
   // update & add face
   var options = this.getFaceOptions( faceName );
-  options.color = typeof value == 'string' ? value : this.color;
+  if (utils.isColor(value)) {
+    options.color = value;
+  } else {
+    options.color = utils.cloneColor(this.color);
+  }
 
   if ( rect ) {
     // update previous
@@ -2154,6 +2836,228 @@ return Box;
 
 } ) );
 /**
+ * Texture
+ */
+( function( root, factory ) {
+    // module definition
+    if ( typeof module == 'object' && module.exports ) {
+      // CommonJS
+      module.exports = factory(require('./vector'));
+    } else {
+      // browser global
+      var Zdog = root.Zdog;
+      Zdog.Texture = factory(Zdog.Vector);
+    }
+  }( this, function factory(Vector) {
+
+  /**
+   * Calculates the inverse of the matrix:
+   *  | x1 x2 x3 |
+   *  | y1 y2 y3 |
+   *  |  1  1  1 |
+   */
+  function inverse(x1, y1, x2, y2, x3, y3) {
+    let tp = [
+      y2 - y3, x3 - x2, x2*y3 - x3*y2,
+      y3 - y1, x1 - x3, x3*y1 - x1*y3,
+      y1 - y2, x2 - x1, x1*y2 - x2*y1];
+    let det = tp[2] + tp[5] + tp[8];
+    return tp.map(function(x) { return x / det;});
+  }
+
+  function parsePointMap(size, map) {
+    if (!Array.isArray(map) || !map.length) {
+      map = [0, 0, size[0], size[1]];
+    }
+    if (typeof(map[0]) == "number") {
+      if (map.length < 4) {
+        let tmp = map;
+        map = [0, 0, size[0], size[1]];
+        for (let i = 0; i < tmp.length; i++) {
+          map[i] = tmp[i];
+        }
+      }
+      return [
+          new Vector({x:map[0], y:map[1], z:1}),
+          new Vector({x:map[0] + map[2], y:map[1], z:1}),
+          new Vector({x:map[0], y:map[1] + map[3], z:1})
+        ];
+    } else {
+      return [new Vector(map[0]), new Vector(map[1]), new Vector(map[2])];
+    }
+  }
+
+  var idCounter = 0;
+
+  const optionKeys = [
+    'img',
+    'linearGrad',
+    'radialGrad',
+    'colorStops',
+    'src',
+    'dst'
+  ]
+
+  /**
+   * Creates a tecture map. Possible options:
+   *    img: Image object to be used as texture
+   *    linearGrad: [x1, y1, x2, y2]  Array defining the linear gradient
+   *    radialGrad: [x0, y0, r0, x1, y1, r1] Array defining the radial gradient
+   *    colorStops: [offset1, color1, offset2, color2...] Array defining the color
+   *                stops for the gradient, offset must be in range [0, 1]
+   *
+   *    src: <surface definition> Represents the surface for the texture. Above
+   *         gradient definition should be represented in this coordinate space
+   *    dst: <surface definition> Represents the surface of the object. This allows
+   *         keeping the texture definition independent of the surface definition
+   *
+   *   <surface definition> Can be represented in one of the following ways:
+   *     [x, y, width, height] => We use 3 points top-left, top-right, bottom-left
+   *     [x, y] => image/gradient size is used for width and height with the above rule
+   *     [vector, vector, vector] => provided points are used
+   */
+  function Texture(options) {
+    this.id = idCounter++;
+    this.isTexture = true;
+
+    options = options || { }
+    for (var key in options ) {
+      if (optionKeys.indexOf( key ) != -1 ) {
+        this[key] = options[key];
+      }
+    }
+
+    var size;
+    if (options.img) {
+      size = [options.img.width, options.img.height];
+    } else if (options.linearGrad) {
+      size = [Math.abs(options.linearGrad[2] - options.linearGrad[0]), Math.abs(options.linearGrad[3] - options.linearGrad[1])];
+    } else if (options.radialGrad) {
+      size = [Math.abs(options.radialGrad[3] - options.radialGrad[0]), Math.abs(options.radialGrad[4] - options.radialGrad[1])];
+    } else {
+      throw "One of [img, linearGrad, radialGrad] is required";
+    }
+    if (size[0] == 0) size[0] = size[1];
+    if (size[1] == 0) size[1] = size[0];
+
+    this.src = parsePointMap(size, options.src);
+    this.dst = parsePointMap(size, options.dst);
+
+    this.srcInverse = inverse(
+      this.src[0].x, this.src[0].y,
+      this.src[1].x, this.src[1].y,
+      this.src[2].x, this.src[2].y);
+    this.p1 = new Vector();
+    this.p2 = new Vector();
+    this.p3 = new Vector();
+    this.matrix = [0, 0, 0, 0, 0, 0];
+  };
+
+  Texture.prototype.getMatrix = function() {
+    let m = this.matrix;
+    let inverse = this.srcInverse;
+    m[0] = this.p1.x * inverse[0] + this.p2.x * inverse[3] + this.p3.x * inverse[6];
+    m[1] = this.p1.y * inverse[0] + this.p2.y * inverse[3] + this.p3.y * inverse[6];
+    m[2] = this.p1.x * inverse[1] + this.p2.x * inverse[4] + this.p3.x * inverse[7];
+    m[3] = this.p1.y * inverse[1] + this.p2.y * inverse[4] + this.p3.y * inverse[7];
+    m[4] = this.p1.x * inverse[2] + this.p2.x * inverse[5] + this.p3.x * inverse[8];
+    m[5] = this.p1.y * inverse[2] + this.p2.y * inverse[5] + this.p3.y * inverse[8];
+    return m;
+  }
+
+  Texture.prototype.getCanvasFill = function(ctx) {
+    if (!this.pattern) {
+      if (this.img) {
+        this.pattern = ctx.createPattern(this.img, "repeat");
+      } else {
+        this.pattern = this.linearGrad
+          ? ctx.createLinearGradient.apply(ctx, this.linearGrad)
+          : ctx.createRadialGradient.apply(ctx, this.radialGrad);
+        if (this.colorStops) {
+          for (var i = 0; i < this.colorStops.length; i+=2) {
+            this.pattern.addColorStop(this.colorStops[i], this.colorStops[i+1]);
+          }
+        }
+      }
+    }
+    // pattern.setTransform is not supported in IE,
+    // so transform the context instead
+    ctx.transform.apply(ctx, this.getMatrix());
+    return this.pattern;
+  };
+
+  const svgURI = 'http://www.w3.org/2000/svg';
+  Texture.prototype.getSvgFill = function(svg) {
+    if (!this.svgPattern) {
+      if (this.img) {
+        this.svgPattern = document.createElementNS( svgURI, 'pattern');
+        this.svgPattern.setAttribute("width", this.img.width);
+        this.svgPattern.setAttribute("height", this.img.height);
+        this.svgPattern.setAttribute("patternUnits", "userSpaceOnUse");
+        this.attrTransform = "patternTransform";
+
+        let img = document.createElementNS( svgURI, 'image');
+        img.setAttribute("href", this.img.src);
+        this.svgPattern.appendChild(img);
+      } else {
+        var type, vals, keys;
+        if (this.linearGrad) {
+          type = "linearGradient";
+          vals = this.linearGrad;
+          keys = ["x1", "y1", "x2", "y2"]
+        } else {
+          type = "radialGradient";
+          vals = this.radialGrad;
+          keys = ["fx", "fy", "fr", "cx", "cy", "r"]
+        }
+        this.svgPattern = document.createElementNS( svgURI, type);
+        for (var i = 0; i < keys.length; i++) {
+          this.svgPattern.setAttribute(keys[i], vals[i]);
+        }
+
+        if (this.colorStops) {
+          for (var i = 0; i < this.colorStops.length; i+=2) {
+            let colorStop = document.createElementNS(svgURI, 'stop' );
+            colorStop.setAttribute("offset", this.colorStops[i]);
+            colorStop.setAttribute("style", "stop-color:" + this.colorStops[i+1]);
+            this.svgPattern.appendChild(colorStop);
+          }
+        }
+        this.svgPattern.setAttribute("gradientUnits", "userSpaceOnUse");
+        this.attrTransform = "gradientTransform";
+      }
+      this.svgPattern.setAttribute("id", "texture_" + this.id);
+      this._svgUrl = 'url(#texture_' + this.id + ')';
+
+      this.defs = document.createElementNS(svgURI, 'defs' );
+      this.defs.appendChild(this.svgPattern);
+    }
+
+    this.svgPattern.setAttribute(this.attrTransform, 'matrix(' + this.getMatrix().join(' ') + ')');
+    svg.appendChild( this.defs );
+    return this._svgUrl;
+  }
+
+  // ----- update ----- //
+  Texture.prototype.reset = function() {
+    this.p1.set(this.dst[0]);
+    this.p2.set(this.dst[1]);
+    this.p3.set(this.dst[2]);
+  };
+
+  Texture.prototype.transform = function( translation, rotation, scale ) {
+    this.p1.transform(translation, rotation, scale);
+    this.p2.transform(translation, rotation, scale);
+    this.p3.transform(translation, rotation, scale);
+  };
+
+  Texture.prototype.clone = function() {
+    return new Texture(this);
+  };
+
+  return Texture;
+} ) );
+/**
  * Index
  */
 
@@ -2179,7 +3083,10 @@ return Box;
         require('./hemisphere'),
         require('./cylinder'),
         require('./cone'),
-        require('./box')
+        require('./horn'),
+        require('./funnel'),
+        require('./box'),
+        require('./texture')
     );
   } else if ( typeof define == 'function' && define.amd ) {
     /* globals define */ // AMD
@@ -2188,7 +3095,7 @@ return Box;
 /* eslint-disable max-params */
 } )( this, function factory( Zdog, CanvasRenderer, SvgRenderer, Vector, Anchor,
     Dragger, Illustration, PathCommand, Shape, Group, Rect, RoundedRect,
-    Ellipse, Polygon, Hemisphere, Cylinder, Cone, Box ) {
+    Ellipse, Polygon, Hemisphere, Cylinder, Cone, Horn, Funnel, Box, Texture ) {
 /* eslint-enable max-params */
 
       Zdog.CanvasRenderer = CanvasRenderer;
@@ -2207,7 +3114,10 @@ return Box;
       Zdog.Hemisphere = Hemisphere;
       Zdog.Cylinder = Cylinder;
       Zdog.Cone = Cone;
+      Zdog.Horn = Horn;
+      Zdog.Funnel = Funnel;
       Zdog.Box = Box;
+      Zdog.Texture = Texture;
 
       return Zdog;
 } );
