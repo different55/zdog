@@ -139,6 +139,17 @@ Cylinder.prototype.create = function( /* options */) {
 // Cylinder shape does not render anything
 Cylinder.prototype.render = function() {};
 
+Cylinder.prototype.setPath = function() {
+  if ( !this.frontBase || !this.rearBase ) return;
+  var baseZ = this.length / 2;
+  this.frontBase.translate = { z: baseZ };
+  this.frontBase.diameter = this.diameter;
+  this.rearBase.translate = { z: -baseZ };
+  this.rearBase.diameter = this.diameter;
+  this.frontBase.updatePath();
+  this.rearBase.updatePath();
+};
+
 // ----- set child properties ----- //
 
 var childProperties = [ 'stroke', 'fill', 'color', 'visible' ];
