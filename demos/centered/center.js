@@ -110,6 +110,7 @@ var canvasOrange = new Zdog.Illustration({
 var svgDot = new Zdog.Illustration({
   element: 'svg.dot',
   dragRotate: model,
+  isolated: true,
   //centered: dot,
   onDragStart: function() {
     isSpinning = false;
@@ -118,6 +119,7 @@ var svgDot = new Zdog.Illustration({
 var svgEggplant = new Zdog.Illustration({
   element: 'svg.eggplant',
   dragRotate: model,
+  isolated: true,
   centered: zCircle,
   onDragStart: function() {
     isSpinning = false;
@@ -126,6 +128,7 @@ var svgEggplant = new Zdog.Illustration({
 var svgGarnet = new Zdog.Illustration({
   element: 'svg.garnet',
   dragRotate: model,
+  isolated: true,
   centered: xRect,
   onDragStart: function() {
     isSpinning = false;

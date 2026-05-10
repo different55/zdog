@@ -21,6 +21,7 @@ var TAU = utils.TAU;
 var Illustration = Anchor.subclass({
   element: undefined,
   centered: true,
+  isolated: false,
   zoom: 1,
   dragRotate: false,
   resize: false,
@@ -189,6 +190,12 @@ Illustration.prototype.prerenderSvg = function() {
     viewWidth + ' ' + viewHeight );
 }
 
+Illustration.prototype.postrenderSvg = function() {
+  if (this.isolated){
+      this.element.innerHTML = this.element.innerHTML;
+  }
+}
+
 Illustration.prototype.setSvg = function( element ) {
   this.element = element;
   this.isSvg = true;
@@ -219,6 +226,7 @@ Illustration.prototype.renderGraphSvg = function( item ) {
   this.prerenderSvg();
   this.onPrerender( this.element );
   Anchor.prototype.renderGraphSvg.call( item, this.element );
+  this.postrenderSvg();
 };
 
 function empty( element ) {
