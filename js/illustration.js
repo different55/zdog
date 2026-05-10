@@ -21,6 +21,7 @@ var TAU = utils.TAU;
 var Illustration = Anchor.subclass({
   element: undefined,
   centered: true,
+  isolated: false,
   zoom: 1,
   dragRotate: false,
   resize: false,
@@ -157,9 +158,13 @@ Illustration.prototype.prerenderCanvas = function() {
   ctx.clearRect( 0, 0, this.canvasWidth, this.canvasHeight );
   ctx.save();
   if ( this.centered ) {
-    var centerX = this.width / 2 * this.pixelRatio;
-    var centerY = this.height / 2 * this.pixelRatio;
-    ctx.translate( centerX, centerY );
+    var centerX = this.width / 2;
+    var centerY = this.height / 2;
+    if (this.centered.origin) {
+      centerX -= this.centered.renderOrigin.x;
+      centerY -= this.centered.renderOrigin.y;
+    }
+    ctx.translate( centerX * this.pixelRatio, centerY * this.pixelRatio);
   }
   var scale = this.pixelRatio * this.zoom;
   ctx.scale( scale, scale );
@@ -171,6 +176,25 @@ Illustration.prototype.postrenderCanvas = function() {
 };
 
 // ----- svg ----- //
+
+Illustration.prototype.prerenderSvg = function() {
+  var viewWidth = this.width / this.zoom;
+  var viewHeight = this.height / this.zoom;
+  var viewX = this.centered ? -viewWidth/2 : 0;
+  var viewY = this.centered ? -viewHeight/2 : 0;
+  if (this.centered.origin) {
+    viewX += this.centered.renderOrigin.x;
+    viewY += this.centered.renderOrigin.y;
+  }
+  this.element.setAttribute( 'viewBox', viewX + ' ' + viewY + ' ' +
+    viewWidth + ' ' + viewHeight );
+}
+
+Illustration.prototype.postrenderSvg = function() {
+  if (this.isolated){
+      this.element.innerHTML = this.element.innerHTML;
+  }
+}
 
 Illustration.prototype.setSvg = function( element ) {
   this.element = element;
@@ -185,12 +209,7 @@ Illustration.prototype.setSvg = function( element ) {
 Illustration.prototype.setSizeSvg = function( width, height ) {
   this.width = width;
   this.height = height;
-  var viewWidth = width / this.zoom;
-  var viewHeight = height / this.zoom;
-  var viewX = this.centered ? -viewWidth/2 : 0;
-  var viewY = this.centered ? -viewHeight/2 : 0;
-  this.element.setAttribute( 'viewBox', viewX + ' ' + viewY + ' ' +
-    viewWidth + ' ' + viewHeight );
+  this.prerenderSvg();
   if ( this.resize ) {
     // remove size attributes, let size be determined by viewbox
     this.element.removeAttribute('width');
@@ -204,8 +223,10 @@ Illustration.prototype.setSizeSvg = function( width, height ) {
 Illustration.prototype.renderGraphSvg = function( item ) {
   item = item || this;
   empty( this.element );
+  this.prerenderSvg();
   this.onPrerender( this.element );
   Anchor.prototype.renderGraphSvg.call( item, this.element );
+  this.postrenderSvg();
 };
 
 function empty( element ) {
